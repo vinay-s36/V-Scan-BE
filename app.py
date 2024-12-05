@@ -267,7 +267,7 @@ def scan():
         total_vulnerabilities = scanner.scan_website()
         filename = scanner.generate_report()
 
-        return {"message": "Scanned successfully", "report": filename, "total_vulnerabilities": total_vulnerabilities}, 200
+        return {"status": "success", "report": filename, "total_vulnerabilities": total_vulnerabilities}, 200
     except Exception as e:
         return {"error": str(e)}, 500
 
