@@ -59,8 +59,10 @@ def get_scans():
             {
                 "id": scan.id,
                 "target_url": scan.target_url,
+                "status": scan.status,
                 "total_vulnerabilities": scan.total_vulnerabilities,
-                "report": scan.report
+                "report": scan.report,
+                "date": scan.created_at
             }
             for scan in scans
         ]
@@ -85,13 +87,15 @@ def scan():
         total_vulnerabilities = scanner.scan_website()
         filename = scanner.generate_report()
 
-        scan = Scan(target_url=target_url,
+        scan = Scan(target_url=target_url, status='Completed',
                     total_vulnerabilities=total_vulnerabilities, report=filename)
         db.session.add(scan)
         db.session.commit()
-        return jsonify({'message': 'Scan completed successfully'}), 200
+        return jsonify({"message": "Scanned successfully"}), 200
 
     except Exception as e:
+        scan.status = 'Failed'
+        db.session.commit()
         return {"error": str(e)}, 500
 
 
