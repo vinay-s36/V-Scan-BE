@@ -73,30 +73,36 @@ def get_scans():
 
 @app.route('/scan', methods=['POST'])
 def scan():
+    scan = None
     try:
         data = request.get_json()
         if not data or 'target_url' not in data:
-            return "Missing 'target_url' in request body", 400
-
+            return jsonify({"error": "Missing 'target_url' in request body"}), 400
         target_url = data['target_url']
 
         if not is_valid_url(target_url):
-            return "Invalid URL format", 400
+            return jsonify({"error": "Invalid URL format"}), 400
 
         scanner = WebVulnerabilityScanner(target_url)
         total_vulnerabilities = scanner.scan_website()
         filename = scanner.generate_report()
 
-        scan = Scan(target_url=target_url, status='Completed',
-                    total_vulnerabilities=total_vulnerabilities, report=filename)
+        scan = Scan(
+            target_url=target_url,
+            status='Completed',
+            total_vulnerabilities=total_vulnerabilities,
+            report=filename
+        )
         db.session.add(scan)
         db.session.commit()
+
         return jsonify({"message": "Scanned successfully"}), 200
 
     except Exception as e:
-        scan.status = 'Failed'
-        db.session.commit()
-        return {"error": str(e)}, 500
+        if scan:
+            scan.status = 'Failed'
+            db.session.commit()
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ import requests
 import re
 from typing import List, Dict
 import os
+from datetime import datetime
 
 
 class WebVulnerabilityScanner:
@@ -130,42 +131,37 @@ class WebVulnerabilityScanner:
 
         return headers_vulnerabilities
 
-    def ssl_check(self) -> List[Dict]:
-        """Check SSL/TLS configuration"""
+    def check_ssl_certificate(self) -> List[Dict]:
+        """Checks the validity of an SSL certificate for a given hostname."""
         ssl_vulnerabilities = []
         try:
             context = ssl.create_default_context()
             with socket.create_connection((self.base_url, 443)) as sock:
-                with context.wrap_socket(sock, server_hostname=self.base_url) as secure_sock:
-                    cert = secure_sock.getpeercert()
-
-                    # Check certificate expiration
-                    import datetime
-                    expiry = datetime.datetime.strptime(
+                with context.wrap_socket(sock, server_hostname=self.base_url) as ssock:
+                    cert = ssock.getpeercert()
+                    # Extract certificate details
+                    issue_date = datetime.strptime(
+                        cert['notBefore'], '%b %d %H:%M:%S %Y %Z')
+                    expiry_date = datetime.strptime(
                         cert['notAfter'], '%b %d %H:%M:%S %Y %Z')
-                    if expiry < datetime.datetime.now():
+
+                    # Check if certificate is valid
+                    if issue_date <= datetime.now() <= expiry_date:
+                        pass
+                    else:
                         ssl_vulnerabilities.append({
                             'type': 'SSL Certificate Expired',
                             'risk': 'High'
                         })
-
-        except ssl.SSLError as e:
-            ssl_vulnerabilities.append({
-                'type': 'SSL Configuration Issue',
-                'details': str(e),
-                'risk': 'Critical'
-            })
-        except Exception:
+        except Exception as e:
             ssl_vulnerabilities.append({
                 'type': 'SSL Configuration Issue',
                 'risk': 'Critical'
             })
-
         return ssl_vulnerabilities
 
     def scan_website(self) -> List[Dict]:
         """Main scanning method"""
-        print(f"Scanning {self.target_url}...")
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
             pages = executor.submit(self.crawl_website).result()
@@ -174,7 +170,7 @@ class WebVulnerabilityScanner:
                 executor.submit(self.sql_injection_scan, pages),
                 executor.submit(self.xss_scan, pages),
                 executor.submit(self.security_headers_check),
-                executor.submit(self.ssl_check)
+                executor.submit(self.check_ssl_certificate)
             ]
 
             for future in concurrent.futures.as_completed(vulnerability_checks):
@@ -197,7 +193,6 @@ class WebVulnerabilityScanner:
 
             if not self.vulnerabilities:
                 report_file.write("No significant vulnerabilities detected!\n")
-                print(f"Report saved to {filename}")
                 return
 
             for vuln in self.vulnerabilities:
