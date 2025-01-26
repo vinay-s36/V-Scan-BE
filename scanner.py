@@ -8,6 +8,9 @@ import re
 from typing import List, Dict
 import os
 from datetime import datetime
+import whois
+import nmap
+import dns.resolver
 
 
 class WebVulnerabilityScanner:
@@ -160,17 +163,160 @@ class WebVulnerabilityScanner:
             })
         return ssl_vulnerabilities
 
+    # Utility function for decoding data safely
+    def safe_decode(self, value):
+        if isinstance(value, bytes):
+            return value.decode('utf-8', errors='ignore')
+        elif isinstance(value, list):
+            return [self.safe_decode(item) for item in value]
+        elif isinstance(value, dict):
+            return {self.safe_decode(k): self.safe_decode(v) for k, v in value.items()}
+        return value
+
+    # WHOIS information
+    def get_whois_info(self):
+        try:
+            w = whois.whois(self.base_url)
+            return {
+                "domain_name": self.safe_decode(w.domain_name),
+                "registrar": self.safe_decode(w.registrar),
+                "creation_date": self.safe_decode(str(w.creation_date)),
+                "expiration_date": self.safe_decode(str(w.expiration_date)),
+                "name_servers": self.safe_decode(w.name_servers),
+                "status": self.safe_decode(w.status),
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    # DKIM check
+    def check_dkim(self):
+        try:
+            selector = "mail"
+            dkim_record = f"{selector}._domainkey.{self.base_url}"
+            answers = dns.resolver.resolve(dkim_record, "TXT")
+            for rdata in answers:
+                if rdata.strings:
+                    return {"dkim": "valid"}
+            return {"dkim": "missing"}
+        except dns.resolver.NoAnswer:
+            return {"dkim": "missing"}
+        except Exception as e:
+            return {"dkim": "missing", "error": str(e)}
+
+    # DMARC check
+    def check_dmarc(self):
+        try:
+            dmarc_record = f"_dmarc.{self.base_url}"
+            answers = dns.resolver.resolve(dmarc_record, "TXT")
+            for rdata in answers:
+                if rdata.strings:
+                    return {"dmarc": "valid"}
+            return {"dmarc": "missing"}
+        except dns.resolver.NoAnswer:
+            return {"dmarc": "missing"}
+        except Exception as e:
+            return {"dmarc": "missing", "error": str(e)}
+
+    # SPF check
+    def check_spf(self):
+        try:
+            answers = dns.resolver.resolve(self.base_url, "TXT")
+            for rdata in answers:
+                if any(b"v=spf1" in txt for txt in rdata.strings):
+                    return {"spf": "valid"}
+            return {"spf": "missing"}
+        except dns.resolver.NoAnswer:
+            return {"spf": "missing"}
+        except Exception as e:
+            return {"spf": "missing", "error": str(e)}
+
+    # Check for exposed files
+    def check_exposed_files(self):
+        exposed_files = [".git/", ".env"]
+        exposed_results = {}
+        for file in exposed_files:
+            url = f"http://{self.base_url}/{file}"
+            try:
+                response = requests.head(url, timeout=5)
+                exposed_results[file] = "Accessible" if response.status_code == 200 else "Not Accessible"
+            except Exception as e:
+                exposed_results[file] = f"Error: {str(e)}"
+        return exposed_results
+
+    # DNS records analysis
+    def scan_dns(self):
+        try:
+            answers = dns.resolver.resolve(self.base_url, "A")
+            return [{"type": "A", "value": rdata.to_text()} for rdata in answers]
+        except Exception as e:
+            return {"error": str(e)}
+
+    # Port scanning
+    def scan_ports(self):
+        try:
+            nm = nmap.PortScanner()
+            nm.scan(self.base_url, arguments="-T4 -Pn")
+            open_ports = []
+            for host in nm.all_hosts():
+                for port in nm[host]["tcp"]:
+                    open_ports.append(
+                        {"port": port, "status": nm[host]["tcp"][port]["state"]})
+            return open_ports
+        except Exception as e:
+            return {"error": str(e)}
+
+    # OS detection
+    def detect_os(self):
+        try:
+            nm = nmap.PortScanner()
+            nm.scan(hosts=self.base_url, arguments="-O -sV -Pn")
+            os_results = []
+            if self.base_url in nm.all_hosts():
+                for osmatch in nm[self.base_url].get("osmatch", []):
+                    os_results.append({
+                        "name": osmatch.get("name", "Unknown"),
+                        "accuracy": osmatch.get("accuracy", 0),
+                        "type": osmatch.get("type", "Unknown"),
+                    })
+            return os_results if os_results else {"os_detection": "No OS information detected"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    # WAF detection
+    def detect_waf(self):
+        try:
+            url = f"http://{self.base_url}"
+            response = requests.get(url, timeout=5)
+            headers = response.headers
+            waf_indicators = ["cloudflare", "sucuri", "imperva", "akamai"]
+            detected_wafs = [indicator for indicator in waf_indicators if any(
+                indicator in str(header).lower() for header in headers)]
+            return {"waf_detected": bool(detected_wafs), "waf_vendors": detected_wafs}
+        except Exception as e:
+            return {"error": str(e)}
+
     def scan_website(self) -> List[Dict]:
         """Main scanning method"""
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            # Crawl pages
             pages = executor.submit(self.crawl_website).result()
 
+            # Run different checks
             vulnerability_checks = [
-                executor.submit(self.sql_injection_scan, pages),
-                executor.submit(self.xss_scan, pages),
-                executor.submit(self.security_headers_check),
-                executor.submit(self.check_ssl_certificate)
+                # executor.submit(self.sql_injection_scan, pages),
+                # executor.submit(self.xss_scan, pages),
+                # executor.submit(self.security_headers_check),
+                # executor.submit(self.check_ssl_certificate),
+                executor.submit(self.get_whois_info),
+                executor.submit(self.check_dkim),
+                executor.submit(self.check_dmarc),
+                executor.submit(self.check_spf),
+                executor.submit(self.detect_os),
+                executor.submit(self.scan_ports),
+                executor.submit(self.detect_waf),
+                executor.submit(self.check_exposed_files),
+                executor.submit(self.scan_dns)
             ]
 
             for future in concurrent.futures.as_completed(vulnerability_checks):
@@ -184,8 +330,13 @@ class WebVulnerabilityScanner:
         if not os.path.exists('scan_reports'):
             os.makedirs('scan_reports')
 
-        filename = os.path.join('scan_reports', re.sub(r'[^a-zA-Z0-9]', '_', self.target_url.replace(
-            'https://', '').replace('http://', '')) + '_vulnerability_report.txt')
+        # Create a sanitized filename
+        filename = os.path.join(
+            'scan_reports',
+            re.sub(r'[^a-zA-Z0-9]', '_',
+                   self.target_url.replace('https://', '').replace('http://', ''))
+            + '_vulnerability_report.txt'
+        )
 
         with open(filename, 'w', encoding='utf-8') as report_file:
             report_file.write("Web Vulnerability Scan Report\n")
@@ -193,15 +344,22 @@ class WebVulnerabilityScanner:
 
             if not self.vulnerabilities:
                 report_file.write("No significant vulnerabilities detected!\n")
-                return
+                return filename
 
             for vuln in self.vulnerabilities:
-                report_file.write(
-                    f"[{vuln.get('risk', 'Unknown')}] {vuln.get('type', 'Unknown Vulnerability')}\n")
-                if 'url' in vuln:
-                    report_file.write(f"   URL: {vuln['url']}\n")
-                if 'payload' in vuln:
-                    report_file.write(f"   Payload: {vuln['payload']}\n")
-                report_file.write('\n')
+                try:
+                    # Write vulnerability details
+                    report_file.write(
+                        f"[{vuln.get('risk', 'Unknown')}] {vuln.get('type', 'Unknown Vulnerability')}\n")
+                    if 'url' in vuln:
+                        report_file.write(f"   URL: {vuln['url']}\n")
+                    if 'payload' in vuln:
+                        report_file.write(f"   Payload: {vuln['payload']}\n")
+                    report_file.write('\n')
+                except Exception as e:
+                    # Log the error to the report and continue
+                    report_file.write(
+                        f"Error processing vulnerability: {vuln}\n")
+                    report_file.write(f"   Exception: {str(e)}\n\n")
 
         return filename

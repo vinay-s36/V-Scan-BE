@@ -84,8 +84,15 @@ def scan():
             return jsonify({"error": "Invalid URL format"}), 400
 
         scanner = WebVulnerabilityScanner(target_url)
-        total_vulnerabilities = scanner.scan_website()
-        filename = scanner.generate_report()
+        try:
+            total_vulnerabilities = scanner.scan_website()
+        except Exception as e:
+            return jsonify({"error1": str(e)}), 500
+
+        try:
+            filename = scanner.generate_report()
+        except Exception as e:
+            return jsonify({"error2": str(e)}), 500
 
         scan = Scan(
             target_url=target_url,
@@ -103,6 +110,11 @@ def scan():
             scan.status = 'Failed'
             db.session.commit()
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/', methods=['GET'])
+def home():
+    return "Web vulnerability scanner"
 
 
 if __name__ == "__main__":
